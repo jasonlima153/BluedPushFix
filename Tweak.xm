@@ -1,9 +1,8 @@
-// BluedPushFix — 终极神经切断与静默保活版
+// BluedPushFix — 终极冻结免疫版 (AVAudioSession 霸权)
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <UserNotifications/UserNotifications.h>
 
-// 1. 无声音频字节码 (绝对防系统底层 5 秒强杀)
 unsigned char silent_mp3[] = {
   0xFF, 0xFB, 0x90, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
 };
@@ -14,7 +13,29 @@ static AVAudioPlayer *audioPlayer = nil;
 static BOOL isAppActuallyBackground = NO;
 
 // ==========================================
-// 1. 统一横幅通知引擎
+// 1. 核心反制：没收原生 App 关闭音频的权限
+// ==========================================
+%hook AVAudioSession
+- (BOOL)setActive:(BOOL)active error:(NSError **)outError {
+    // 如果 App 在后台，且原生代码试图关闭音频 (active == NO)
+    if (!active && isAppActuallyBackground) {
+        NSLog(@"[PushFix] 警告：拦截到原生代码试图关闭音频总闸，已强行驳回！");
+        return YES; // 欺骗原生代码，假装关闭成功，实际上没关
+    }
+    return %orig;
+}
+
+- (BOOL)setActive:(BOOL)active withOptions:(AVAudioSessionSetActiveOptions)options error:(NSError **)outError {
+    if (!active && isAppActuallyBackground) {
+        NSLog(@"[PushFix] 警告：拦截到原生代码试图关闭音频总闸(带参数)，已强行驳回！");
+        return YES; 
+    }
+    return %orig;
+}
+%end
+
+// ==========================================
+// 2. 横幅通知引擎
 // ==========================================
 void fireLocalBannerNotification() {
     if (!isAppActuallyBackground) return; 
@@ -32,54 +53,34 @@ void fireLocalBannerNotification() {
 }
 
 // ==========================================
-// 2. 核心手术：切断网络层的后台感知
+// 3. 神经切断：网络层瞎子模式
 // ==========================================
 %hook BDLiveIM
 - (void)didReceiveProtoMessage:(id)message {
-    if (message) { 
-        %orig(message); 
-        fireLocalBannerNotification(); 
-    } else { 
-        %orig; 
-    }
+    if (message) { %orig(message); fireLocalBannerNotification(); } else { %orig; }
 }
-// 【阻断一】：不让 IM 知道进后台了，防止它主动断开 Socket
-- (void)p_didEnterBackground:(id)arg {
-    // 吞掉！不执行 %orig
-}
-// 【阻断二】：如果它强行想断开，直接拦住
-- (void)disConnect {
-    if (isAppActuallyBackground) return; 
-    %orig;
-}
+- (void)p_didEnterBackground:(id)arg { /* 吞掉 */ }
+- (void)disConnect { if (isAppActuallyBackground) return; %orig; }
 %end
 
 %hook BDgRPCConnector
-// 【阻断三】：不让全局 gRPC 连接器知道进后台了（对应报告发现）
-- (void)p_appDidEnterBackground:(id)notification {
-    // 吞掉！不执行 %orig
-}
-+ (void)disConnect {
-    // 阻止全局静态断开
-}
+- (void)p_appDidEnterBackground:(id)notification { /* 吞掉 */ }
++ (void)disConnect { }
 %end
 
-// 个推底层拦截
 %hook GXPushManager
 - (void)GXPushManagerDidReceivePayloadData:(NSData *)d taskId:(NSString *)t msgId:(NSString *)m offLine:(BOOL)o appId:(NSString *)a {
-    %orig; 
-    fireLocalBannerNotification();
+    %orig; fireLocalBannerNotification();
 }
 %end
 
 %hook GXSocketConnectModule
-// 【阻断四】：拦截个推底层的强制断连
 - (void)disConnect { if (isAppActuallyBackground) return; %orig; }
 - (void)closeSocket { if (isAppActuallyBackground) return; %orig; }
 %end
 
 // ==========================================
-// 3. 绝对同步保活引擎 (防系统强杀)
+// 4. 同步保活引擎 (提前启动)
 // ==========================================
 void startSyncKeepAlive() {
     if (bgTask == UIBackgroundTaskInvalid) {
@@ -106,19 +107,24 @@ void startSyncKeepAlive() {
 }
 
 // ==========================================
-// 4. 生命周期调度 (去掉恶心的重连)
+// 5. 生命周期调度
 // ==========================================
 %hook AppDelegate
+// 优化：在 App 刚准备失去焦点（还没完全进后台）时，就提前抢占音频总闸
+- (void)applicationWillResignActive:(UIApplication *)application {
+    isAppActuallyBackground = YES;
+    startSyncKeepAlive();
+    %orig;
+}
+
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     isAppActuallyBackground = YES;
-    startSyncKeepAlive(); 
-    %orig; // 允许UI和数据库进后台，但网络层已经被我们上面切断了感知
+    // 此时原生 %orig 里面如果有停音乐的代码，会被上面的 AVAudioSession Hook 拦死
+    %orig; 
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
     isAppActuallyBackground = NO;
     %orig;
-    // 删除了所有强制断开和重连的代码！
-    // 只要系统没把 App 杀掉，网络就是一直连着的，进去瞬间秒开，再也不会有“收取中...”
 }
 %end
