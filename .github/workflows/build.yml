@@ -1,4 +1,4 @@
-name: Build Memory-Audio PushFix Dylib
+name: Build, Inject and Auto-Patch IPA (Location Sentinel)
 
 on: [push, pull_request]
 
@@ -9,73 +9,76 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    - name: Install Theos Environment
+    - name: Prepare Theos and Environment
       run: |
         git clone --recursive https://github.com/theos/theos.git $HOME/theos
         echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-
-    # 使用 ProcursusTeam/ldid 仓库（theos/ldid 已不存在），安装依赖后现场编译
-    - name: Compile and Setup Ldid from Source
-      run: |
-        brew install libplist
-        git clone --depth=1 https://github.com/ProcursusTeam/ldid.git $HOME/ldid-src
+        mkdir -p $HOME/ldid-src
+        curl -ksL https://github.com/theos/ldid/archive/refs/heads/master.tar.gz -o ldid.tar.gz
+        tar -xzf ldid.tar.gz -C $HOME/ldid-src --strip-components=1
         cd $HOME/ldid-src
         make -j$(sysctl -n hw.ncpu)
         cp ldid $HOME/theos/bin/
         chmod +x $HOME/theos/bin/ldid
-        echo "[Success] ldid compiled and installed"
-
-    - name: Setup iOS SDK
-      run: |
         rm -rf $HOME/theos/sdks
-        git clone --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
-        
-    - name: Convert MP3 to C Header Array
-      run: |
-        if [ -f "silent.mp3" ]; then
-          xxd -i silent.mp3 silent_data.h
-          echo "[Success] silent_data.h converted."
-        else
-          echo "[Error] silent.mp3 not found!"
-          exit 1
-        fi
+        git clone --quiet --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
 
-    - name: Generate Flexible Filter Plist
+    - name: Prepare Makefile
       run: |
-        cat <<EOF > BluedPushFix.plist
-        {
-            Filter = {
-                Executables = (
-                    "Blued极速版2",
-                    "Blued",
-                    "xiaolAn"
-                );
-            };
-        }
+        cat <<EOF > Makefile
+        TARGET = iphone:clang:latest:10.0
+        ARCHS = arm64
+        include \$(THEOS)/makefiles/common.mk
+        TWEAK_NAME = BluedPushFix
+        BluedPushFix_FILES = Tweak.xm
+        BluedPushFix_CFLAGS = -fobjc-arc
+        # 加入 CoreLocation 框架
+        BluedPushFix_FRAMEWORKS = UIKit AVFoundation UserNotifications CoreLocation
+        include \$(THEOS)/makefiles/tweak.mk
         EOF
         
+        cat <<EOF > BluedPushFix.plist
+        { Filter = { Executables = ( "Blued极速版2", "Blued", "xiaolAn" ); }; }
+        EOF
+
     - name: Compile Dylib via Theos
       run: |
         export THEOS=$HOME/theos
         make package FINALPACKAGE=1
 
-    - name: Extract Dylib from Package
+    - name: Auto-Inject and Patch Info.plist
       run: |
-        find .theos -name "BluedPushFix.dylib" -type f
-        DYLIB_PATH=$(find .theos -name "BluedPushFix.dylib" -type f | head -1)
-        if [ -n "$DYLIB_PATH" ]; then
-          cp "$DYLIB_PATH" ./BluedPushFix.dylib
-          echo "[Success] Dylib extracted from $DYLIB_PATH"
-        else
-          echo "[Warning] Dylib not found in .theos, extracting from deb..."
-          dpkg-deb -x packages/*.deb extracted_pkg
-          find extracted_pkg -name "BluedPushFix.dylib" -type f -exec cp {} ./BluedPushFix.dylib \;
+        if [ -f "app.ipa" ]; then
+          curl -ksL https://github.com/alexzielenski/optool/releases/download/0.1/optool.zip -o optool.zip
+          unzip -q optool.zip -d optool_dir
+          chmod +x optool_dir/optool
+
+          unzip -q app.ipa -d extracted_ipa/
+          APP_DIR=$(ls -d extracted_ipa/Payload/*.app)
+          EXECUTABLE_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_DIR/Info.plist")
+          
+          cp .theos/obj/debug/BluedPushFix.dylib "$APP_DIR/"
+          ./optool_dir/optool install -c load -p "@executable_path/BluedPushFix.dylib" -t "$APP_DIR/$EXECUTABLE_NAME"
+
+          PLIST_PATH="$APP_DIR/Info.plist"
+          # 配置音频与定位后台权限
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST_PATH" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST_PATH" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:1 string location" "$PLIST_PATH" 2>/dev/null || true
+          
+          # 写入必须的隐私授权文案，否则真机不会弹出定位请求
+          /usr/libexec/PlistBuddy -c "Add :NSLocationAlwaysAndWhenInUseUsageDescription string '允许始终定位以接收后台新消息提醒'" "$PLIST_PATH" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :NSLocationWhenInUseUsageDescription string '允许定位以接收新消息提醒'" "$PLIST_PATH" 2>/dev/null || true
+
+          cd extracted_ipa
+          zip -qr ../Blued_Final_Patched.ipa Payload/
+          cd ..
         fi
 
-    - name: Output Result Artifact
+    - name: Output Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: BluedPureMemoryPushFix
+        name: Blued_Ultimate_Release
         path: |
-          BluedPushFix.dylib
-          packages/*.deb
+          .theos/obj/debug/BluedPushFix.dylib
+          Blued_Final_Patched.ipa
