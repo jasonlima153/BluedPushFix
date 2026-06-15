@@ -1,0 +1,9 @@
+Package: com.blued.pushfix
+Name: BluedPushFix
+Depends: mobilesubstrate
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Memory-audio keepalive push fix for Blued multi-instance.
+Maintainer: jasonlima153
+Author: jasonlima153
+Section: Tweaks
