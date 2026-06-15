@@ -1,4 +1,4 @@
-// BluedPushFix — 终极冻结免疫版 (AVAudioSession 霸权)
+// BluedPushFix — 终极心脏起搏与横幅满血版
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <UserNotifications/UserNotifications.h>
@@ -12,30 +12,13 @@ static UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
 static AVAudioPlayer *audioPlayer = nil;
 static BOOL isAppActuallyBackground = NO;
 
-// ==========================================
-// 1. 核心反制：没收原生 App 关闭音频的权限
-// ==========================================
-%hook AVAudioSession
-- (BOOL)setActive:(BOOL)active error:(NSError **)outError {
-    // 如果 App 在后台，且原生代码试图关闭音频 (active == NO)
-    if (!active && isAppActuallyBackground) {
-        NSLog(@"[PushFix] 警告：拦截到原生代码试图关闭音频总闸，已强行驳回！");
-        return YES; // 欺骗原生代码，假装关闭成功，实际上没关
-    }
-    return %orig;
-}
-
-- (BOOL)setActive:(BOOL)active withOptions:(AVAudioSessionSetActiveOptions)options error:(NSError **)outError {
-    if (!active && isAppActuallyBackground) {
-        NSLog(@"[PushFix] 警告：拦截到原生代码试图关闭音频总闸(带参数)，已强行驳回！");
-        return YES; 
-    }
-    return %orig;
-}
-%end
+// 实例捕获
+static id g_activeGRPCConnector = nil;
+static id g_activeWatchdog = nil;
+static dispatch_source_t g_heartbeatTimer = NULL;
 
 // ==========================================
-// 2. 横幅通知引擎
+// 1. 本地横幅通知引擎
 // ==========================================
 void fireLocalBannerNotification() {
     if (!isAppActuallyBackground) return; 
@@ -53,7 +36,7 @@ void fireLocalBannerNotification() {
 }
 
 // ==========================================
-// 3. 神经切断：网络层瞎子模式
+// 2. 拦截与切断网络层后台感知
 // ==========================================
 %hook BDLiveIM
 - (void)didReceiveProtoMessage:(id)message {
@@ -64,6 +47,7 @@ void fireLocalBannerNotification() {
 %end
 
 %hook BDgRPCConnector
+- (instancetype)init { id obj = %orig; g_activeGRPCConnector = obj; return obj; }
 - (void)p_appDidEnterBackground:(id)notification { /* 吞掉 */ }
 + (void)disConnect { }
 %end
@@ -79,8 +63,26 @@ void fireLocalBannerNotification() {
 - (void)closeSocket { if (isAppActuallyBackground) return; %orig; }
 %end
 
+%hook GXWatchdog
+- (instancetype)init { id obj = %orig; g_activeWatchdog = obj; return obj; }
+%end
+
 // ==========================================
-// 4. 同步保活引擎 (提前启动)
+// 3. 拦截音频总闸 (防止原生代码关声音)
+// ==========================================
+%hook AVAudioSession
+- (BOOL)setActive:(BOOL)active error:(NSError **)outError {
+    if (!active && isAppActuallyBackground) return YES;
+    return %orig;
+}
+- (BOOL)setActive:(BOOL)active withOptions:(AVAudioSessionSetActiveOptions)options error:(NSError **)outError {
+    if (!active && isAppActuallyBackground) return YES; 
+    return %orig;
+}
+%end
+
+// ==========================================
+// 4. 核心：心脏起搏器 (底层心跳保活)
 // ==========================================
 void startSyncKeepAlive() {
     if (bgTask == UIBackgroundTaskInvalid) {
@@ -90,27 +92,48 @@ void startSyncKeepAlive() {
         }];
     }
     
+    // 1. 拉起音频锁住进程
     @try {
         [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
         [[AVAudioSession sharedInstance] setActive:YES error:nil];
-        
         if (!audioPlayer) {
             audioPlayer = [[AVAudioPlayer alloc] initWithData:[NSData dataWithBytes:silent_mp3 length:silent_mp3_len] error:nil];
             audioPlayer.numberOfLoops = -1;
             audioPlayer.volume = 0.01;
             [audioPlayer prepareToPlay];
         }
-        if (!audioPlayer.isPlaying) {
-            [audioPlayer play];
-        }
+        if (!audioPlayer.isPlaying) [audioPlayer play];
     } @catch (NSException *e) {}
+    
+    // 2. GCD 起搏器：防服务器踢人
+    if (!g_heartbeatTimer) {
+        g_heartbeatTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+        // 每 20 秒向服务器发一次底层的存活脉冲
+        dispatch_source_set_timer(g_heartbeatTimer, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), 20 * NSEC_PER_SEC, 1 * NSEC_PER_SEC);
+        dispatch_source_set_event_handler(g_heartbeatTimer, ^{
+            @try {
+                if (g_activeWatchdog && [g_activeWatchdog respondsToSelector:@selector(watchdogNeedHeartBeat)]) {
+                    [g_activeWatchdog performSelector:@selector(watchdogNeedHeartBeat)];
+                }
+                if (g_activeGRPCConnector && [g_activeGRPCConnector respondsToSelector:@selector(p_pingServer)]) {
+                    [g_activeGRPCConnector performSelector:@selector(p_pingServer)];
+                }
+            } @catch (NSException *e) {}
+        });
+        dispatch_resume(g_heartbeatTimer);
+    }
 }
 
 // ==========================================
-// 5. 生命周期调度
+// 5. 生命周期调度与通知授权
 // ==========================================
 %hook AppDelegate
-// 优化：在 App 刚准备失去焦点（还没完全进后台）时，就提前抢占音频总闸
+- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    // 强行向系统索要本地弹窗的权限（防止分身没有弹窗许可）
+    [[UNUserNotificationCenter currentNotificationCenter] requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge) completionHandler:^(BOOL granted, NSError * _Nullable error) {}];
+    return %orig;
+}
+
 - (void)applicationWillResignActive:(UIApplication *)application {
     isAppActuallyBackground = YES;
     startSyncKeepAlive();
@@ -119,7 +142,6 @@ void startSyncKeepAlive() {
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     isAppActuallyBackground = YES;
-    // 此时原生 %orig 里面如果有停音乐的代码，会被上面的 AVAudioSession Hook 拦死
     %orig; 
 }
 
