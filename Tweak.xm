@@ -1,4 +1,4 @@
-// BluedPushFix — 异步解耦防闪退完美版
+// BluedPushFix — V5 防冲突与异步解耦终极版
 // Target: Blued极速版2 (com.danlan.xiaolAn)
 
 #import <UIKit/UIKit.h>
@@ -16,12 +16,11 @@ static dispatch_source_t g_heartbeatTimer = NULL;
 static BOOL g_isBackground = NO;
 
 // ==========================================
-// 1. 本地横幅通知 (增加异步安全保护)
+// 1. 本地横幅通知 (异步安全队列)
 // ==========================================
 void fireLocalBannerNotification(NSString *title, NSString *body) {
     if (!g_isBackground) return; 
     
-    // 强制丢到后台默认队列处理，绝对不占用或阻塞主线程的 UI 渲染
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
         content.title = title;
@@ -35,7 +34,7 @@ void fireLocalBannerNotification(NSString *title, NSString *body) {
 }
 
 // ==========================================
-// 2. 实例捕获与防崩溃安全拦截
+// 2. 实例捕获与底层解耦拦截 (避开 BluedHook 冲突区域)
 // ==========================================
 %hook GXWatchdog
 - (instancetype)init { id obj = %orig; g_activeWatchdog = obj; return obj; }
@@ -48,7 +47,6 @@ void fireLocalBannerNotification(NSString *title, NSString *body) {
 %hook BDLiveIM
 - (instancetype)init { id obj = %orig; g_activeLiveIM = obj; return obj; }
 - (void)didReceiveProtoMessage:(id)message {
-    // 严格的安全检查：防止空指针引发崩溃
     if (message) {
         %orig(message);
         fireLocalBannerNotification(@"互动通知", @"直播间或派对有新的动态");
@@ -58,15 +56,17 @@ void fireLocalBannerNotification(NSString *title, NSString *body) {
 }
 %end
 
-%hook GJIMSessionService
-- (void)p_handlePushPackage:(id)arg1 {
-    // 严格的安全检查：防止个推后台数据包损坏导致 UI 闪退
-    if (arg1) {
-        %orig(arg1);
-        fireLocalBannerNotification(@"新消息", @"您收到了一条新的聊天消息");
-    } else {
-        %orig;
-    }
+// 【核心修复】：彻底废弃 GJIMSessionService 的双重 Hook！
+// 转而在个推底层接口拦截 Payload 数据，这里 BluedHook 触碰不到，绝对安全
+%hook GXPushManager
+- (void)GXPushManagerDidReceivePayloadData:(NSData *)data 
+                                    taskId:(NSString *)taskId 
+                                     msgId:(NSString *)msgId 
+                                   offLine:(BOOL)offLine 
+                                     appId:(NSString *)appId {
+    %orig; // 让个推原生服务正常消化数据
+    // 触发安全横幅
+    fireLocalBannerNotification(@"新消息", @"您收到了一条新的聊天消息");
 }
 %end
 
@@ -117,7 +117,7 @@ void startGentleHeartbeat() {
 }
 
 // ==========================================
-// 4. 生命周期缓冲修复 (解决进入前台闪退)
+// 4. 生命周期平滑过渡防 ANR
 // ==========================================
 %hook AppDelegate
 
@@ -132,8 +132,7 @@ void startGentleHeartbeat() {
     g_isBackground = NO;
     %orig;
     
-    // 【闪退修复核心】将延迟提高到 1.5 秒，留出绝对充足的时间让 UI 和广告 SDK 恢复上下文
-    // 避免网络重连和界面渲染撞车导致的内存崩溃
+    // 留出 1.5 秒的安全缓冲带，让被冻结的 UI 层彻底苏醒，防止网络重连冲垮主线程
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (g_activeGRPCConnector) {
             #pragma clang diagnostic push
@@ -141,7 +140,6 @@ void startGentleHeartbeat() {
             if ([g_activeGRPCConnector respondsToSelector:@selector(disConnect)]) {
                 [g_activeGRPCConnector performSelector:@selector(disConnect)];
             }
-            // 重新平滑握手，同步最新聊天记录
             if ([g_activeGRPCConnector respondsToSelector:@selector(connect)]) {
                 [g_activeGRPCConnector performSelector:@selector(connect)];
             }
