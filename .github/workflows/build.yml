@@ -60,8 +60,15 @@ jobs:
         export THEOS=$HOME/theos
         make package FINALPACKAGE=1
 
+    - name: Extract Dylib from Package
+      run: |
+        cp .theos/obj/debug/BluedPushFix.dylib ./BluedPushFix.dylib
+        echo "[Success] 已提取 BluedPushFix.dylib"
+
     - name: Output Result Artifact
       uses: actions/upload-artifact@v4
       with:
         name: BluedPureMemoryPushFix
-        path: .theos/obj/debug/BluedPushFix.dylib
+        path: |
+          BluedPushFix.dylib
+          packages/*.deb
