@@ -31,7 +31,7 @@ jobs:
         TWEAK_NAME = BluedPushFix
         BluedPushFix_FILES = Tweak.xm
         BluedPushFix_CFLAGS = -fobjc-arc
-        BluedPushFix_FRAMEWORKS = UIKit AVFoundation UserNotifications
+        BluedPushFix_FRAMEWORKS = UIKit AVFoundation UserNotifications AudioToolbox
         include \$(THEOS)/makefiles/tweak.mk
         EOF
         

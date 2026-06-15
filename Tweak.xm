@@ -1,69 +1,85 @@
-// BluedPushFix — 终极防冻结 (修复音频初始化 10秒必死 Bug)
+// BluedPushFix — 终极去重、防自收、硬件震动版
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <UserNotifications/UserNotifications.h>
+#import <AudioToolbox/AudioToolbox.h>
 
-// ✨ 修复核心：生成绝对合法的 1秒静音 WAV 音频数据
-NSData* generateSilentWAV() {
-    unsigned char wavHeader[] = {
-        0x52, 0x49, 0x46, 0x46, 0x26, 0x00, 0x00, 0x00, // RIFF Chunk
-        0x57, 0x41, 0x56, 0x45, 0x66, 0x6d, 0x74, 0x20, // WAVE fmt
-        0x10, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, // Format (PCM, Mono)
-        0x44, 0xAC, 0x00, 0x00, 0x88, 0x58, 0x01, 0x00, // 44100 Hz
-        0x02, 0x00, 0x10, 0x00, 0x64, 0x61, 0x74, 0x61, // data chunk
-        0x02, 0x00, 0x00, 0x00, 0x00, 0x00              // 1 sample of silence
-    };
-    return [NSData dataWithBytes:wavHeader length:sizeof(wavHeader)];
+// ✨ 核心修复 1：生成真实的 2秒钟 静音 WAV，彻底解决底层音频停止导致的断网问题
+NSData* generateStandardSilentWAV() {
+    int sampleRate = 16000;
+    int duration = 2; 
+    int numSamples = sampleRate * duration;
+    int dataSize = numSamples * 2; 
+    int fileSize = 36 + dataSize;
+    
+    NSMutableData *wav = [NSMutableData dataWithCapacity:fileSize + 8];
+    [wav appendBytes:"RIFF" length:4];
+    [wav appendBytes:&fileSize length:4];
+    [wav appendBytes:"WAVE" length:4];
+    [wav appendBytes:"fmt " length:4];
+    int fmtSize = 16; [wav appendBytes:&fmtSize length:4];
+    short audioFormat = 1; [wav appendBytes:&audioFormat length:2];
+    short numChannels = 1; [wav appendBytes:&numChannels length:2];
+    [wav appendBytes:&sampleRate length:4];
+    int byteRate = sampleRate * 2; [wav appendBytes:&byteRate length:4];
+    short blockAlign = 2; [wav appendBytes:&blockAlign length:2];
+    short bitsPerSample = 16; [wav appendBytes:&bitsPerSample length:2];
+    [wav appendBytes:"data" length:4];
+    [wav appendBytes:&dataSize length:4];
+    
+    NSMutableData *zeros = [NSMutableData dataWithLength:dataSize];
+    [wav appendData:zeros];
+    return wav;
 }
 
 static UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
 static AVAudioPlayer *audioPlayer = nil;
 static BOOL isAppActuallyBackground = NO;
 
-// 实例捕获
-static id g_activeGRPCConnector = nil;
-static id g_activeWatchdog = nil;
-static dispatch_source_t g_heartbeatTimer = NULL;
+// 防抖动时间戳
+static NSTimeInterval lastNotifyTime = 0;
 
 // ==========================================
-// 1. 本地横幅通知引擎
+// 1. 精准横幅 + 强制硬件震动
 // ==========================================
 void fireLocalBannerNotification() {
-    if (!isAppActuallyBackground) return;
-
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+    if (!isAppActuallyBackground) return; 
+    
+    // ✨ 核心修复 2：防抖机制，限制最多每 2 秒只允许弹一次，杜绝疯狂刷屏
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - lastNotifyTime < 2.0) return;
+    lastNotifyTime = now;
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
         UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
         content.title = @"新消息";
         content.body = @"您收到了一条新的聊天消息";
         content.sound = [UNNotificationSound defaultSound];
-
+        
+        // 使用时间戳作为 ID，避免系统覆盖横幅
+        NSString *notifyId = [NSString stringWithFormat:@"Push_%f", now];
         UNTimeIntervalNotificationTrigger *trigger = [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:0.1 repeats:NO];
-        UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:@"PushNotify_Msg" content:content trigger:trigger];
+        UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:notifyId content:content trigger:trigger];
         [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:nil];
+        
+        // ✨ 核心修复 3：强制调用手机硬件震动马达
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
     });
 }
 
 // ==========================================
-// 2. 拦截与切断网络层后台感知
+// 2. 网络层瞎子模式 (只断感知，不弹杂音)
 // ==========================================
 %hook BDLiveIM
-- (void)didReceiveProtoMessage:(id)message {
-    if (message) { %orig(message); fireLocalBannerNotification(); } else { %orig; }
-}
-- (void)p_didEnterBackground:(id)arg { /* 彻底吞掉 */ }
+// ✨ 核心修复 4：去掉了这里的横幅触发！不再把你发的消息、心跳、已读回执当成新消息！
+- (void)didReceiveProtoMessage:(id)message { %orig; }
+- (void)p_didEnterBackground:(id)arg { /* 吞掉进后台感知 */ }
 - (void)disConnect { if (isAppActuallyBackground) return; %orig; }
 %end
 
 %hook BDgRPCConnector
-- (instancetype)init { id obj = %orig; g_activeGRPCConnector = obj; return obj; }
-- (void)p_appDidEnterBackground:(id)notification { /* 彻底吞掉 */ }
+- (void)p_appDidEnterBackground:(id)notification { /* 吞掉进后台感知 */ }
 + (void)disConnect { }
-%end
-
-%hook GXPushManager
-- (void)GXPushManagerDidReceivePayloadData:(NSData *)d taskId:(NSString *)t msgId:(NSString *)m offLine:(BOOL)o appId:(NSString *)a {
-    %orig; fireLocalBannerNotification();
-}
 %end
 
 %hook GXSocketConnectModule
@@ -71,12 +87,19 @@ void fireLocalBannerNotification() {
 - (void)closeSocket { if (isAppActuallyBackground) return; %orig; }
 %end
 
-%hook GXWatchdog
-- (instancetype)init { id obj = %orig; g_activeWatchdog = obj; return obj; }
+// ==========================================
+// 3. ✨ 唯一指定通知源：个推真实推送
+// ==========================================
+%hook GXPushManager
+- (void)GXPushManagerDidReceivePayloadData:(NSData *)d taskId:(NSString *)t msgId:(NSString *)m offLine:(BOOL)o appId:(NSString *)a {
+    %orig; 
+    // 只有这里（真正的官方离线推送通道）收到数据，才弹横幅和震动！
+    fireLocalBannerNotification();
+}
 %end
 
 // ==========================================
-// 3. 拦截音频总闸 (防止原生代码关声音)
+// 4. 音频霸权与后台起搏器
 // ==========================================
 %hook AVAudioSession
 - (BOOL)setActive:(BOOL)active error:(NSError **)outError {
@@ -84,14 +107,11 @@ void fireLocalBannerNotification() {
     return %orig;
 }
 - (BOOL)setActive:(BOOL)active withOptions:(AVAudioSessionSetActiveOptions)options error:(NSError **)outError {
-    if (!active && isAppActuallyBackground) return YES;
+    if (!active && isAppActuallyBackground) return YES; 
     return %orig;
 }
 %end
 
-// ==========================================
-// 4. ✨ 核心保活与起搏器 (修复崩溃点)
-// ==========================================
 void startSyncKeepAlive() {
     if (bgTask == UIBackgroundTaskInvalid) {
         bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithExpirationHandler:^{
@@ -99,56 +119,30 @@ void startSyncKeepAlive() {
             bgTask = UIBackgroundTaskInvalid;
         }];
     }
-
-    // 1. 拉起合法音频锁住进程
+    
     @try {
         [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];
         [[AVAudioSession sharedInstance] setActive:YES error:nil];
-
+        
         if (!audioPlayer) {
             NSError *err = nil;
-            // ✨ 这里使用了绝对合法的 WAV 文件流，解决 10秒挂掉的根本原因
-            audioPlayer = [[AVAudioPlayer alloc] initWithData:generateSilentWAV() error:&err];
+            audioPlayer = [[AVAudioPlayer alloc] initWithData:generateStandardSilentWAV() error:&err];
             if (audioPlayer) {
                 audioPlayer.numberOfLoops = -1;
                 audioPlayer.volume = 0.01;
                 [audioPlayer prepareToPlay];
-            } else {
-                NSLog(@"[PushFix] 音频初始化失败: %@", err);
             }
         }
         if (audioPlayer && !audioPlayer.isPlaying) {
             [audioPlayer play];
         }
     } @catch (NSException *e) {}
-
-    // 2. GCD 起搏器：防服务器踢人
-    if (!g_heartbeatTimer) {
-        g_heartbeatTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
-        dispatch_source_set_timer(g_heartbeatTimer, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), 20 * NSEC_PER_SEC, 1 * NSEC_PER_SEC);
-        dispatch_source_set_event_handler(g_heartbeatTimer, ^{
-            @try {
-                if (g_activeWatchdog && [g_activeWatchdog respondsToSelector:@selector(watchdogNeedHeartBeat)]) {
-                    [g_activeWatchdog performSelector:@selector(watchdogNeedHeartBeat)];
-                }
-                if (g_activeGRPCConnector && [g_activeGRPCConnector respondsToSelector:@selector(p_pingServer)]) {
-                    [g_activeGRPCConnector performSelector:@selector(p_pingServer)];
-                }
-            } @catch (NSException *e) {}
-        });
-        dispatch_resume(g_heartbeatTimer);
-    }
 }
 
 // ==========================================
-// 5. 生命周期调度与通知授权
+// 5. 生命周期调度
 // ==========================================
 %hook AppDelegate
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    [[UNUserNotificationCenter currentNotificationCenter] requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge) completionHandler:^(BOOL granted, NSError * _Nullable error) {}];
-    return %orig;
-}
-
 - (void)applicationWillResignActive:(UIApplication *)application {
     isAppActuallyBackground = YES;
     startSyncKeepAlive();
@@ -157,7 +151,7 @@ void startSyncKeepAlive() {
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     isAppActuallyBackground = YES;
-    %orig;
+    %orig; 
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
