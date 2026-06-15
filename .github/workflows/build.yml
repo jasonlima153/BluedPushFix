@@ -62,8 +62,16 @@ jobs:
 
     - name: Extract Dylib from Package
       run: |
-        cp .theos/obj/debug/BluedPushFix.dylib ./BluedPushFix.dylib
-        echo "[Success] 已提取 BluedPushFix.dylib"
+        find .theos -name "BluedPushFix.dylib" -type f
+        DYLIB_PATH=$(find .theos -name "BluedPushFix.dylib" -type f | head -1)
+        if [ -n "$DYLIB_PATH" ]; then
+          cp "$DYLIB_PATH" ./BluedPushFix.dylib
+          echo "[Success] 已提取 BluedPushFix.dylib 从 $DYLIB_PATH"
+        else
+          echo "[Warning] 未找到 dylib，将从 deb 包中提取"
+          dpkg-deb -x packages/*.deb extracted_pkg
+          find extracted_pkg -name "BluedPushFix.dylib" -type f -exec cp {} ./BluedPushFix.dylib \;
+        fi
 
     - name: Output Result Artifact
       uses: actions/upload-artifact@v4
