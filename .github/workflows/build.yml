@@ -74,10 +74,21 @@ jobs:
           cd ..
         fi
 
+    - name: Extract and Output Artifacts
+      run: |
+        DYLIB_PATH=$(find .theos -name "BluedPushFix.dylib" -type f | head -1)
+        if [ -n "$DYLIB_PATH" ]; then
+          cp "$DYLIB_PATH" ./BluedPushFix.dylib
+          echo "[Success] Dylib extracted from $DYLIB_PATH"
+        else
+          dpkg-deb -x packages/*.deb extracted_pkg
+          find extracted_pkg -name "BluedPushFix.dylib" -type f -exec cp {} ./BluedPushFix.dylib \;
+        fi
+
     - name: Output Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Blued_Ultimate_Release
         path: |
-          .theos/obj/debug/BluedPushFix.dylib
-          Blued_Final_Patched.ipa
+          BluedPushFix.dylib
+          packages/*.deb
