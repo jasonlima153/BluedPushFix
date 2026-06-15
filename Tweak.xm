@@ -1,10 +1,9 @@
-// BluedPushFix — 终极精准通知 + 稳固后台版 (致歉封卷版)
+// BluedPushFix — 终极防闪退与业务层拦截版
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
 #import <UserNotifications/UserNotifications.h>
 #import <AudioToolbox/AudioToolbox.h>
 
-// 1. 标准2秒静音WAV（死死锁住后台CPU，防系统冻结）
 NSData* generateStandardSilentWAV() {
     int sampleRate = 16000;
     int duration = 2; 
@@ -35,8 +34,6 @@ NSData* generateStandardSilentWAV() {
 static UIBackgroundTaskIdentifier bgTask = UIBackgroundTaskInvalid;
 static AVAudioPlayer *audioPlayer = nil;
 static BOOL isAppActuallyBackground = NO;
-
-// 防抖时间戳
 static NSTimeInterval lastNotifyTime = 0;
 
 static id g_activeWatchdog = nil;
@@ -44,15 +41,21 @@ static id g_activeGRPCConnector = nil;
 static dispatch_source_t g_heartbeatTimer = NULL;
 
 // ==========================================
-// 1. 横幅通知 + 马达触觉反馈
+// 1. 横幅通知与震动 (安全触发)
 // ==========================================
 void fireLocalBannerNotification(NSString *title, NSString *body) {
     if (!isAppActuallyBackground) return; 
     
-    // 2秒防刷屏冷却
+    // 防刷屏
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     if (now - lastNotifyTime < 2.0) return;
     lastNotifyTime = now;
+    
+    // 安全地请求一次通知权限，不碰启动生命周期
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        [[UNUserNotificationCenter currentNotificationCenter] requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge) completionHandler:^(BOOL granted, NSError * _Nullable error) {}];
+    });
     
     dispatch_async(dispatch_get_main_queue(), ^{
         UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
@@ -65,7 +68,6 @@ void fireLocalBannerNotification(NSString *title, NSString *body) {
         UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:notifyId content:content trigger:trigger];
         [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:nil];
         
-        // 硬件震动
         if (@available(iOS 10.0, *)) {
             UIImpactFeedbackGenerator *feedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
             [feedback prepare];
@@ -77,22 +79,15 @@ void fireLocalBannerNotification(NSString *title, NSString *body) {
 }
 
 // ==========================================
-// 2. ✨ 回归初心：精准拦截业务层真实消息 (绝不重复，绝不弹自己)
+// 2. 业务层私聊拦截 (绝对精准，不弹自己)
 // ==========================================
 %hook GJIMSessionService
 - (void)p_handlePushPackage:(id)arg1 {
-    // 结合你发我的第二份报告：加入 if(arg1) 保护，防止 dylib 冲突导致的空指针闪退
-    if (arg1) {
-        %orig(arg1);
-        // 只有真正解析好的业务层私聊消息，才会走到这里！
-        fireLocalBannerNotification(@"新消息", @"您收到了一条新的聊天消息");
-    } else {
-        %orig;
-    }
+    %orig; // 极简调用，防止参数解析导致闪退
+    fireLocalBannerNotification(@"新消息", @"您收到了一条新的聊天消息");
 }
 %end
 
-// 顺带监听个推的系统推送
 %hook GXPushManager
 - (void)GXPushManagerDidReceivePayloadData:(NSData *)d taskId:(NSString *)t msgId:(NSString *)m offLine:(BOOL)o appId:(NSString *)a {
     %orig; 
@@ -101,11 +96,10 @@ void fireLocalBannerNotification(NSString *title, NSString *body) {
 %end
 
 // ==========================================
-// 3. 网络层瞎子模式 (只拦截断开，绝对不去碰消息监听)
+// 3. 网络瞎子模式 (只断感知，不碰业务)
 // ==========================================
 %hook BDLiveIM
-// 删除了坑爹的 didReceiveProtoMessage 监听！
-- (void)p_didEnterBackground:(id)arg { /* 吞掉系统进后台感知 */ }
+- (void)p_didEnterBackground:(id)arg { /* 吞掉 */ }
 - (void)disConnect { if (isAppActuallyBackground) return; %orig; }
 %end
 
@@ -115,7 +109,7 @@ void fireLocalBannerNotification(NSString *title, NSString *body) {
 %end
 
 // ==========================================
-// 4. 实例捕获与音频霸权起搏器
+// 4. 起搏器与音频霸权
 // ==========================================
 %hook GXWatchdog
 - (instancetype)init { id obj = %orig; g_activeWatchdog = obj; return obj; }
@@ -162,7 +156,6 @@ void startSyncKeepAlive() {
         if (audioPlayer && !audioPlayer.isPlaying) [audioPlayer play];
     } @catch (NSException *e) {}
     
-    // GCD 心跳防掉线
     if (!g_heartbeatTimer) {
         g_heartbeatTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
         dispatch_source_set_timer(g_heartbeatTimer, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), 20 * NSEC_PER_SEC, 1 * NSEC_PER_SEC);
@@ -181,14 +174,9 @@ void startSyncKeepAlive() {
 }
 
 // ==========================================
-// 5. 严格的生命周期控制
+// 5. 生命周期 (回归最稳定的三个钩子，杜绝闪退)
 // ==========================================
 %hook AppDelegate
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    [[UNUserNotificationCenter currentNotificationCenter] requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge) completionHandler:^(BOOL granted, NSError * _Nullable error) {}];
-    return %orig;
-}
-
 - (void)applicationWillResignActive:(UIApplication *)application {
     isAppActuallyBackground = YES;
     startSyncKeepAlive();
@@ -201,11 +189,6 @@ void startSyncKeepAlive() {
 }
 
 - (void)applicationWillEnterForeground:(UIApplication *)application {
-    isAppActuallyBackground = NO;
-    %orig;
-}
-
-- (void)applicationDidBecomeActive:(UIApplication *)application {
     isAppActuallyBackground = NO;
     %orig;
 }
