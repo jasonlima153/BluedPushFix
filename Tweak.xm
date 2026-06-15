@@ -3,6 +3,7 @@
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <UserNotifications/UserNotifications.h>
 #import <dispatch/dispatch.h>
 #import <CFNetwork/CFNetwork.h>
 #import <sys/socket.h>
@@ -188,5 +189,60 @@ void setupSilentAudioEngine() {
 - (void)applicationWillEnterForeground:(UIApplication *)application {
     g_isBackground = NO;
     %orig;
+}
+%end
+
+// ==========================================
+// 策略四：底层消息拦截与本地横幅伪造 (无视 APNs 证书)
+// ==========================================
+
+// 封装发送本地通知的方法
+void fireLocalBannerNotification(NSString *title, NSString *body) {
+    // 只有在后台才弹横幅，前台聊天时不弹
+    if (!g_isBackground) return; 
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+        content.title = title;
+        content.body = body;
+        content.sound = [UNNotificationSound defaultSound]; // 触发系统默认提示音
+        
+        // 0.1秒后立刻弹出
+        UNTimeIntervalNotificationTrigger *trigger = [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:0.1 repeats:NO];
+        NSString *reqId = [NSString stringWithFormat:@"PushFix_%f", [[NSDate date] timeIntervalSince1970]];
+        UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:reqId content:content trigger:trigger];
+        
+        [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:nil];
+        NSLog(@"[PushFix] 拦截到新消息，已强行触发本地横幅通知！");
+    });
+}
+
+// 1. 拦截普通聊天消息包 (对应报告中的 GJIMSessionService)
+%hook GJIMSessionService
+- (void)p_handlePushPackage:(id)arg1 {
+    %orig; // 让 App 正常处理聊天数据
+    
+    // 我们不知道具体是谁发来的，统一弹出一个安全的提示
+    fireLocalBannerNotification(@"新消息", @"您收到了一条新的聊天消息");
+}
+%end
+
+// 2. 拦截直播间/派对/gRPC 推送包 (对应报告中的 BDLiveIM)
+%hook BDLiveIM
+- (void)didReceiveProtoMessage:(id)message {
+    %orig;
+    fireLocalBannerNotification(@"互动通知", @"直播间或派对有新的动态");
+}
+%end
+
+// 3. 拦截个推底层直接下发的 Payload 数据
+%hook GXPushManager
+- (void)GXPushManagerDidReceivePayloadData:(NSData *)data 
+                                    taskId:(NSString *)taskId 
+                                     msgId:(NSString *)msgId 
+                                   offLine:(BOOL)offLine 
+                                     appId:(NSString *)appId {
+    %orig;
+    fireLocalBannerNotification(@"系统通知", @"您有新的系统推送消息");
 }
 %end

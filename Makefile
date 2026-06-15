@@ -7,7 +7,7 @@ TWEAK_NAME = BluedPushFix
 # 编译时会自动寻找同级目录下的 silent_data.h
 BluedPushFix_FILES = Tweak.xm
 BluedPushFix_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-BluedPushFix_FRAMEWORKS = UIKit AVFoundation CFNetwork
+BluedPushFix_FRAMEWORKS = UIKit AVFoundation CFNetwork UserNotifications
 
 include $(THEOS)/makefiles/tweak.mk
 
