@@ -6,7 +6,7 @@ include $(THEOS)/makefiles/common.mk
 TWEAK_NAME = BluedPushFix
 BluedPushFix_FILES = Tweak.xm
 BluedPushFix_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
-BluedPushFix_FRAMEWORKS = UIKit AVFoundation UserNotifications CoreLocation
+BluedPushFix_FRAMEWORKS = UIKit AVFoundation UserNotifications
 
 include $(THEOS)/makefiles/tweak.mk
 
