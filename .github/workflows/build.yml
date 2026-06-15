@@ -14,7 +14,13 @@ jobs:
         git clone --recursive https://github.com/theos/theos.git $HOME/theos
         echo "THEOS=$HOME/theos" >> $GITHUB_ENV
         
-    # 核心修复：在 clone 之前，强制删除 Theos 递归下载留下的空目录/旧目录，防止 128 冲突
+    # 核心修复：直接下载预编译的 ldid 放入 theos/bin，彻底解决 command not found 
+    - name: Download and Setup Ldid
+      run: |
+        curl -ksL https://github.com/theos/ldid/releases/download/v2.1.5/ldid_macos_x86_64 -o $HOME/theos/bin/ldid
+        chmod +x $HOME/theos/bin/ldid
+        echo "[Success] ldid 签名工具已成功注入 Theos 核心目录"
+
     - name: Setup iOS SDK
       run: |
         rm -rf $HOME/theos/sdks
