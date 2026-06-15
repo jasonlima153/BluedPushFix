@@ -17,7 +17,7 @@ jobs:
     # 核心修复：现场 clone 并直接编译 ldid 源码，彻底根除 404 网页假文件问题
     - name: Compile and Setup Ldid from Source
       run: |
-        git clone https://github.com/theos/ldid.git $HOME/ldid-src
+        git clone --depth=1 https://github.com/theos/ldid.git $HOME/ldid-src
         cd $HOME/ldid-src
         make -j$(sysctl -n hw.ncpu)
         cp ldid $HOME/theos/bin/
@@ -27,7 +27,7 @@ jobs:
     - name: Setup iOS SDK
       run: |
         rm -rf $HOME/theos/sdks
-        git clone --quiet --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
+        git clone --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
         
     - name: Convert MP3 to C Header Array
       run: |
