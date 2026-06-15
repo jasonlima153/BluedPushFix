@@ -109,7 +109,7 @@ void setupGCDHeartbeat() {
     // 强制接管心跳，拒绝执行 %orig 以避开底层 NSTimer 的挂起限制
     #pragma clang diagnostic push
     #pragma clang diagnostic ignored "-Wundeclared-selector"
-    id channel = [self performSelector:@selector(channel)];
+    id channel = [g_activeWatchdog performSelector:@selector(channel)];
     if (channel) {
         [channel performSelector:@selector(sendHeartbeatData)];
     }
