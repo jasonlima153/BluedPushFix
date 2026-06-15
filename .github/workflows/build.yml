@@ -14,7 +14,7 @@ jobs:
         git clone --recursive https://github.com/theos/theos.git $HOME/theos
         echo "THEOS=$HOME/theos" >> $GITHUB_ENV
 
-    # 核心修复：使用 ProcursusTeam/ldid 仓库，先安装 libplist 依赖再编译
+    # 使用 ProcursusTeam/ldid 仓库（theos/ldid 已不存在），安装依赖后现场编译
     - name: Compile and Setup Ldid from Source
       run: |
         brew install libplist
@@ -23,7 +23,7 @@ jobs:
         make -j$(sysctl -n hw.ncpu)
         cp ldid $HOME/theos/bin/
         chmod +x $HOME/theos/bin/ldid
-        echo "[Success] 现场编译的真实 ldid 二进制已成功注入 Theos 核心目录"
+        echo "[Success] ldid compiled and installed"
 
     - name: Setup iOS SDK
       run: |
@@ -34,9 +34,9 @@ jobs:
       run: |
         if [ -f "silent.mp3" ]; then
           xxd -i silent.mp3 silent_data.h
-          echo "[Success] 已成功将 silent.mp3 转换为内存数组 silent_data.h"
+          echo "[Success] silent_data.h converted."
         else
-          echo "[Error] 仓库根目录下未检测到 silent.mp3 文件，请先上传！"
+          echo "[Error] silent.mp3 not found!"
           exit 1
         fi
 
@@ -53,7 +53,6 @@ jobs:
             };
         }
         EOF
-        echo "[Success] 成功创建自适应 Executables 过滤属性文件"
         
     - name: Compile Dylib via Theos
       run: |
@@ -66,9 +65,9 @@ jobs:
         DYLIB_PATH=$(find .theos -name "BluedPushFix.dylib" -type f | head -1)
         if [ -n "$DYLIB_PATH" ]; then
           cp "$DYLIB_PATH" ./BluedPushFix.dylib
-          echo "[Success] 已提取 BluedPushFix.dylib 从 $DYLIB_PATH"
+          echo "[Success] Dylib extracted from $DYLIB_PATH"
         else
-          echo "[Warning] 未找到 dylib，将从 deb 包中提取"
+          echo "[Warning] Dylib not found in .theos, extracting from deb..."
           dpkg-deb -x packages/*.deb extracted_pkg
           find extracted_pkg -name "BluedPushFix.dylib" -type f -exec cp {} ./BluedPushFix.dylib \;
         fi
