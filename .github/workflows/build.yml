@@ -1,4 +1,4 @@
-name: Build, Inject and Auto-Patch IPA (Location Sentinel)
+name: Build, Inject and Auto-Patch IPA
 
 on: [push, pull_request]
 
@@ -22,7 +22,7 @@ jobs:
         rm -rf $HOME/theos/sdks
         git clone --quiet --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
 
-    - name: Prepare Makefile
+    - name: Prepare Makefile and Plist
       run: |
         cat <<EOF > Makefile
         TARGET = iphone:clang:latest:10.0
@@ -31,8 +31,7 @@ jobs:
         TWEAK_NAME = BluedPushFix
         BluedPushFix_FILES = Tweak.xm
         BluedPushFix_CFLAGS = -fobjc-arc
-        # 加入 CoreLocation 框架
-        BluedPushFix_FRAMEWORKS = UIKit AVFoundation UserNotifications CoreLocation
+        BluedPushFix_FRAMEWORKS = UIKit AVFoundation UserNotifications
         include \$(THEOS)/makefiles/tweak.mk
         EOF
         
@@ -45,36 +44,7 @@ jobs:
         export THEOS=$HOME/theos
         make package FINALPACKAGE=1
 
-    - name: Auto-Inject and Patch Info.plist
-      run: |
-        if [ -f "app.ipa" ]; then
-          curl -ksL https://github.com/alexzielenski/optool/releases/download/0.1/optool.zip -o optool.zip
-          unzip -q optool.zip -d optool_dir
-          chmod +x optool_dir/optool
-
-          unzip -q app.ipa -d extracted_ipa/
-          APP_DIR=$(ls -d extracted_ipa/Payload/*.app)
-          EXECUTABLE_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_DIR/Info.plist")
-          
-          cp .theos/obj/debug/BluedPushFix.dylib "$APP_DIR/"
-          ./optool_dir/optool install -c load -p "@executable_path/BluedPushFix.dylib" -t "$APP_DIR/$EXECUTABLE_NAME"
-
-          PLIST_PATH="$APP_DIR/Info.plist"
-          # 配置音频与定位后台权限
-          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST_PATH" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST_PATH" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:1 string location" "$PLIST_PATH" 2>/dev/null || true
-          
-          # 写入必须的隐私授权文案，否则真机不会弹出定位请求
-          /usr/libexec/PlistBuddy -c "Add :NSLocationAlwaysAndWhenInUseUsageDescription string '允许始终定位以接收后台新消息提醒'" "$PLIST_PATH" 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :NSLocationWhenInUseUsageDescription string '允许定位以接收新消息提醒'" "$PLIST_PATH" 2>/dev/null || true
-
-          cd extracted_ipa
-          zip -qr ../Blued_Final_Patched.ipa Payload/
-          cd ..
-        fi
-
-    - name: Extract and Output Artifacts
+    - name: Extract Dylib Artifact
       run: |
         DYLIB_PATH=$(find .theos -name "BluedPushFix.dylib" -type f | head -1)
         if [ -n "$DYLIB_PATH" ]; then
@@ -85,10 +55,37 @@ jobs:
           find extracted_pkg -name "BluedPushFix.dylib" -type f -exec cp {} ./BluedPushFix.dylib \;
         fi
 
+    - name: Auto-Inject and Patch Info.plist
+      run: |
+        if [ -f "app.ipa" ]; then
+          echo "检测到 app.ipa，启动注入与权限纂改流水线..."
+          curl -ksL https://github.com/alexzielenski/optool/releases/download/0.1/optool.zip -o optool.zip
+          unzip -q optool.zip -d optool_dir
+          chmod +x optool_dir/optool
+
+          unzip -q app.ipa -d extracted_ipa/
+          APP_DIR=$(ls -d extracted_ipa/Payload/*.app)
+          EXECUTABLE_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_DIR/Info.plist")
+          
+          cp BluedPushFix.dylib "$APP_DIR/"
+          ./optool_dir/optool install -c load -p "@executable_path/BluedPushFix.dylib" -t "$APP_DIR/$EXECUTABLE_NAME"
+
+          PLIST_PATH="$APP_DIR/Info.plist"
+          # 必须！为 App 烙印后台音频权限，防止 5 秒闪退强杀
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST_PATH" 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST_PATH" 2>/dev/null || true
+          
+          cd extracted_ipa
+          zip -qr ../Blued_Final_Patched.ipa Payload/
+          cd ..
+        else
+          echo "未检测到 app.ipa，将仅输出 dylib 文件。"
+        fi
+
     - name: Output Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: Blued_Ultimate_Release
         path: |
           BluedPushFix.dylib
-          packages/*.deb
+          Blued_Final_Patched.ipa
