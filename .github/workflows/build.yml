@@ -1,0 +1,43 @@
+name: Build Memory-Audio PushFix Dylib
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Install Theos Environment
+      run: |
+        bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+        echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+        
+    - name: Setup iOS SDK
+      run: |
+        git clone --quiet --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
+        
+    # 核心自动化步骤：编译前自动将仓库中的 silent.mp3 转换为 C 数组头文件
+    - name: Convert MP3 to C Header Array
+      run: |
+        if [ -f "silent.mp3" ]; then
+          xxd -i silent.mp3 silent_data.h
+          echo "[Success] 已成功将 silent.mp3 转换为内存数组 silent_data.h"
+          echo "=== silent_data.h 前 10 行预览 ==="
+          head -n 10 silent_data.h
+        else
+          echo "[Error] 仓库根目录下未检测到 silent.mp3 文件，请先上传！"
+          exit 1
+        fi
+        
+    - name: Compile Dylib via Theos
+      run: |
+        export THEOS=$HOME/theos
+        make package FINALPACKAGE=1
+
+    - name: Output Result Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: BluedPureMemoryPushFix
+        path: .theos/obj/debug/BluedPushFix.dylib
