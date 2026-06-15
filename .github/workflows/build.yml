@@ -9,7 +9,6 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
-    # 修复图 1 报错：直接 clone 源码，完全避开 GitHub API Rate Limit 限制
     - name: Install Theos Environment
       run: |
         git clone --recursive https://github.com/theos/theos.git $HOME/theos
@@ -29,19 +28,22 @@ jobs:
           exit 1
         fi
 
-    # 修复图 2 报错：在构建前，动态生成 Theos 强制要求的 Filter Plist 属性文件
-    - name: Generate Required Filter Plist
+    # 核心修复：动态生成全局通配 Plist，不再锁死官方包名
+    # 这样不管是 com.danlan.xiaolAn 还是加了 1、2、3，dylib 都能强制注入加载
+    - name: Generate Flexible Filter Plist
       run: |
         cat <<EOF > BluedPushFix.plist
         {
             Filter = {
-                Bundles = (
-                    "com.danlan.xiaolAn"
+                Executables = (
+                    "Blued极速版2",
+                    "Blued",
+                    "xiaolAn"
                 );
             };
         }
         EOF
-        echo "[Success] 成功创建并配置 BluedPushFix.plist"
+        echo "[Success] 成功创建自适应 Executables 过滤属性文件"
         
     - name: Compile Dylib via Theos
       run: |

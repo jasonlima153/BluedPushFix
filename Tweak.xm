@@ -128,6 +128,11 @@ void triggerAudioKeepAlive() {
 %hook AppDelegate
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     %orig;
+    
+    // 动态获取当前运行实例的真实 Bundle ID 并打印，方便多开调试
+    NSString *currentBundleID = [[NSBundle mainBundle] bundleIdentifier];
+    NSLog(@"[PushFix] 检测到当前运行的分身包名为: %@", currentBundleID);
+    
     NSLog(@"[PushFix] 监听到 App 切后台，正在将长连接网络注入内存守护状态...");
     triggerAudioKeepAlive();
 }
