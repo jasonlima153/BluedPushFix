@@ -9,28 +9,39 @@ jobs:
     - name: Checkout Code
       uses: actions/checkout@v4
 
+    # 修复图 1 报错：直接 clone 源码，完全避开 GitHub API Rate Limit 限制
     - name: Install Theos Environment
       run: |
-        bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
+        git clone --recursive https://github.com/theos/theos.git $HOME/theos
         echo "THEOS=$HOME/theos" >> $GITHUB_ENV
         
     - name: Setup iOS SDK
       run: |
-        rm -rf $HOME/theos/sdks
         git clone --quiet --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
         
-    # 核心自动化步骤：编译前自动将仓库中的 silent.mp3 转换为 C 数组头文件
     - name: Convert MP3 to C Header Array
       run: |
         if [ -f "silent.mp3" ]; then
           xxd -i silent.mp3 silent_data.h
           echo "[Success] 已成功将 silent.mp3 转换为内存数组 silent_data.h"
-          echo "=== silent_data.h 前 10 行预览 ==="
-          head -n 10 silent_data.h
         else
           echo "[Error] 仓库根目录下未检测到 silent.mp3 文件，请先上传！"
           exit 1
         fi
+
+    # 修复图 2 报错：在构建前，动态生成 Theos 强制要求的 Filter Plist 属性文件
+    - name: Generate Required Filter Plist
+      run: |
+        cat <<EOF > BluedPushFix.plist
+        {
+            Filter = {
+                Bundles = (
+                    "com.danlan.xiaolAn"
+                );
+            };
+        }
+        EOF
+        echo "[Success] 成功创建并配置 BluedPushFix.plist"
         
     - name: Compile Dylib via Theos
       run: |
