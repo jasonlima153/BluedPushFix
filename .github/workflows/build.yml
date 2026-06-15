@@ -14,8 +14,10 @@ jobs:
         git clone --recursive https://github.com/theos/theos.git $HOME/theos
         echo "THEOS=$HOME/theos" >> $GITHUB_ENV
         
+    # 核心修复：在 clone 之前，强制删除 Theos 递归下载留下的空目录/旧目录，防止 128 冲突
     - name: Setup iOS SDK
       run: |
+        rm -rf $HOME/theos/sdks
         git clone --quiet --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
         
     - name: Convert MP3 to C Header Array
@@ -28,8 +30,6 @@ jobs:
           exit 1
         fi
 
-    # 核心修复：动态生成全局通配 Plist，不再锁死官方包名
-    # 这样不管是 com.danlan.xiaolAn 还是加了 1、2、3，dylib 都能强制注入加载
     - name: Generate Flexible Filter Plist
       run: |
         cat <<EOF > BluedPushFix.plist
