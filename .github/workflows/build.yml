@@ -13,13 +13,16 @@ jobs:
       run: |
         git clone --recursive https://github.com/theos/theos.git $HOME/theos
         echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-        
-    # 核心修复：直接下载预编译的 ldid 放入 theos/bin，彻底解决 command not found 
-    - name: Download and Setup Ldid
+
+    # 核心修复：现场 clone 并直接编译 ldid 源码，彻底根除 404 网页假文件问题
+    - name: Compile and Setup Ldid from Source
       run: |
-        curl -ksL https://github.com/theos/ldid/releases/download/v2.1.5/ldid_macos_x86_64 -o $HOME/theos/bin/ldid
+        git clone https://github.com/theos/ldid.git $HOME/ldid-src
+        cd $HOME/ldid-src
+        make -j$(sysctl -n hw.ncpu)
+        cp ldid $HOME/theos/bin/
         chmod +x $HOME/theos/bin/ldid
-        echo "[Success] ldid 签名工具已成功注入 Theos 核心目录"
+        echo "[Success] 现场编译的真实 ldid 二进制已成功注入 Theos 核心目录"
 
     - name: Setup iOS SDK
       run: |
