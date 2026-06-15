@@ -13,9 +13,8 @@ jobs:
       run: |
         git clone --recursive https://github.com/theos/theos.git $HOME/theos
         echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-        mkdir -p $HOME/ldid-src
-        curl -ksL https://github.com/theos/ldid/archive/refs/heads/master.tar.gz -o ldid.tar.gz
-        tar -xzf ldid.tar.gz -C $HOME/ldid-src --strip-components=1
+        brew install libplist
+        git clone --depth=1 https://github.com/ProcursusTeam/ldid.git $HOME/ldid-src
         cd $HOME/ldid-src
         make -j$(sysctl -n hw.ncpu)
         cp ldid $HOME/theos/bin/
