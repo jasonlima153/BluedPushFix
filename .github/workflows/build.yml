@@ -14,10 +14,10 @@ jobs:
         git clone --recursive https://github.com/theos/theos.git $HOME/theos
         echo "THEOS=$HOME/theos" >> $GITHUB_ENV
 
-    # 核心修复：现场 clone 并直接编译 ldid 源码，彻底根除 404 网页假文件问题
+    # 核心修复：使用 ProcursusTeam/ldid 仓库（theos/ldid 已不存在），现场编译 ldid
     - name: Compile and Setup Ldid from Source
       run: |
-        git clone --depth=1 https://github.com/theos/ldid.git $HOME/ldid-src
+        git clone --depth=1 https://github.com/ProcursusTeam/ldid.git $HOME/ldid-src
         cd $HOME/ldid-src
         make -j$(sysctl -n hw.ncpu)
         cp ldid $HOME/theos/bin/
