@@ -16,6 +16,7 @@ jobs:
         
     - name: Setup iOS SDK
       run: |
+        rm -rf $HOME/theos/sdks
         git clone --quiet --depth=1 https://github.com/theos/sdks.git $HOME/theos/sdks
         
     # 核心自动化步骤：编译前自动将仓库中的 silent.mp3 转换为 C 数组头文件
