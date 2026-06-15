@@ -1,4 +1,4 @@
-// BluedPushFix — 稳健后台守护与数据同步修复版
+// BluedPushFix — 异步解耦防闪退完美版
 // Target: Blued极速版2 (com.danlan.xiaolAn)
 
 #import <UIKit/UIKit.h>
@@ -16,18 +16,18 @@ static dispatch_source_t g_heartbeatTimer = NULL;
 static BOOL g_isBackground = NO;
 
 // ==========================================
-// 1. 本地横幅通知 (修复弹窗堆叠)
+// 1. 本地横幅通知 (增加异步安全保护)
 // ==========================================
 void fireLocalBannerNotification(NSString *title, NSString *body) {
     if (!g_isBackground) return; 
     
-    dispatch_async(dispatch_get_main_queue(), ^{
+    // 强制丢到后台默认队列处理，绝对不占用或阻塞主线程的 UI 渲染
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
         content.title = title;
         content.body = body;
         content.sound = [UNNotificationSound defaultSound];
         
-        // 使用固定的 Identifier，这样新消息会覆盖老横幅，不会满屏堆叠
         UNTimeIntervalNotificationTrigger *trigger = [UNTimeIntervalNotificationTrigger triggerWithTimeInterval:0.1 repeats:NO];
         UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:@"BluedClone_Push" content:content trigger:trigger];
         [[UNUserNotificationCenter currentNotificationCenter] addNotificationRequest:request withCompletionHandler:nil];
@@ -35,12 +35,47 @@ void fireLocalBannerNotification(NSString *title, NSString *body) {
 }
 
 // ==========================================
-// 2. 合法后台申请与音频守护 (防闪退核心)
+// 2. 实例捕获与防崩溃安全拦截
+// ==========================================
+%hook GXWatchdog
+- (instancetype)init { id obj = %orig; g_activeWatchdog = obj; return obj; }
+%end
+
+%hook BDgRPCConnector
+- (instancetype)init { id obj = %orig; g_activeGRPCConnector = obj; return obj; }
+%end
+
+%hook BDLiveIM
+- (instancetype)init { id obj = %orig; g_activeLiveIM = obj; return obj; }
+- (void)didReceiveProtoMessage:(id)message {
+    // 严格的安全检查：防止空指针引发崩溃
+    if (message) {
+        %orig(message);
+        fireLocalBannerNotification(@"互动通知", @"直播间或派对有新的动态");
+    } else {
+        %orig;
+    }
+}
+%end
+
+%hook GJIMSessionService
+- (void)p_handlePushPackage:(id)arg1 {
+    // 严格的安全检查：防止个推后台数据包损坏导致 UI 闪退
+    if (arg1) {
+        %orig(arg1);
+        fireLocalBannerNotification(@"新消息", @"您收到了一条新的聊天消息");
+    } else {
+        %orig;
+    }
+}
+%end
+
+// ==========================================
+// 3. 合法后台申请与音频保活
 // ==========================================
 void applyLegalBackgroundPrivilege() {
     dispatch_async(dispatch_get_main_queue(), ^{
         UIApplication *app = [UIApplication sharedApplication];
-        // 向 iOS 申请合法的后台运行时间
         bgTask = [app beginBackgroundTaskWithExpirationHandler:^{
             [app endBackgroundTask:bgTask];
             bgTask = UIBackgroundTaskInvalid;
@@ -63,27 +98,17 @@ void applyLegalBackgroundPrivilege() {
     });
 }
 
-// ==========================================
-// 3. 柔性心跳 (20秒一次，防系统电量制裁)
-// ==========================================
 void startGentleHeartbeat() {
     if (!g_heartbeatTimer) {
-        g_heartbeatTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
-        // 将高频 5秒 改为安全的 20秒，大幅降低被系统强杀的概率
+        g_heartbeatTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0));
         dispatch_source_set_timer(g_heartbeatTimer, dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), 20 * NSEC_PER_SEC, 2 * NSEC_PER_SEC);
         dispatch_source_set_event_handler(g_heartbeatTimer, ^{
             @try {
-                if (g_activeWatchdog) {
-                    #pragma clang diagnostic push
-                    #pragma clang diagnostic ignored "-Wundeclared-selector"
+                if (g_activeWatchdog && [g_activeWatchdog respondsToSelector:@selector(watchdogNeedHeartBeat)]) {
                     [g_activeWatchdog performSelector:@selector(watchdogNeedHeartBeat)];
-                    #pragma clang diagnostic pop
                 }
-                if (g_activeGRPCConnector) {
-                    #pragma clang diagnostic push
-                    #pragma clang diagnostic ignored "-Wundeclared-selector"
+                if (g_activeGRPCConnector && [g_activeGRPCConnector respondsToSelector:@selector(p_pingServer)]) {
                     [g_activeGRPCConnector performSelector:@selector(p_pingServer)];
-                    #pragma clang diagnostic pop
                 }
             } @catch (NSException *e) {}
         });
@@ -92,43 +117,13 @@ void startGentleHeartbeat() {
 }
 
 // ==========================================
-// 4. 实例捕获与消息横幅拦截
-// ==========================================
-%hook GXWatchdog
-- (instancetype)init { id obj = %orig; g_activeWatchdog = obj; return obj; }
-%end
-
-%hook BDLiveIM
-- (instancetype)init { id obj = %orig; g_activeLiveIM = obj; return obj; }
-- (void)didReceiveProtoMessage:(id)message {
-    %orig;
-    fireLocalBannerNotification(@"互动通知", @"直播间或派对有新的动态");
-}
-%end
-
-%hook BDgRPCConnector
-- (instancetype)init { id obj = %orig; g_activeGRPCConnector = obj; return obj; }
-%end
-
-%hook GJIMSessionService
-- (void)p_handlePushPackage:(id)arg1 {
-    %orig;
-    fireLocalBannerNotification(@"新消息", @"您收到了一条新的聊天消息");
-}
-%end
-
-// ==========================================
-// 5. 状态机修复：允许断开，前台强刷！
+// 4. 生命周期缓冲修复 (解决进入前台闪退)
 // ==========================================
 %hook AppDelegate
 
 - (void)applicationDidEnterBackground:(UIApplication *)application {
     g_isBackground = YES;
-    
-    // 允许 App 执行原生的后台处理（这会让它的数据库安全存盘，解决记录丢失问题）
     %orig; 
-    
-    // 然后我们再用合法手段拉起后台权限
     applyLegalBackgroundPrivilege();
     startGentleHeartbeat();
 }
@@ -137,17 +132,16 @@ void startGentleHeartbeat() {
     g_isBackground = NO;
     %orig;
     
-    // 核心修复：回到前台时，主动掐断原有的 Socket 并强制 App 重新连接！
-    // 这将逼迫 App 重新握手服务器，完美拉取你离线期间的所有最新聊天记录！
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    // 【闪退修复核心】将延迟提高到 1.5 秒，留出绝对充足的时间让 UI 和广告 SDK 恢复上下文
+    // 避免网络重连和界面渲染撞车导致的内存崩溃
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (g_activeGRPCConnector) {
             #pragma clang diagnostic push
             #pragma clang diagnostic ignored "-Wundeclared-selector"
-            // 先断开
             if ([g_activeGRPCConnector respondsToSelector:@selector(disConnect)]) {
                 [g_activeGRPCConnector performSelector:@selector(disConnect)];
             }
-            // 逼迫重连拉取数据
+            // 重新平滑握手，同步最新聊天记录
             if ([g_activeGRPCConnector respondsToSelector:@selector(connect)]) {
                 [g_activeGRPCConnector performSelector:@selector(connect)];
             }
