@@ -10,3 +10,6 @@ BluedPushFix_CFLAGS = -fobjc-arc
 BluedPushFix_FRAMEWORKS = UIKit AVFoundation
 
 include $(THEOS)/makefiles/tweak.mk
+
+after-install::
+	install.exec "killall -9 Blued"
